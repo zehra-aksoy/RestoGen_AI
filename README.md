@@ -7,8 +7,8 @@ Profesyonel mutfaklarda hava durumu, yerel etkinlikler ve anlık stok durumunun 
 RestoGen AI, ekstra hiçbir donanıma ihtiyaç duymadan mutfak yönetimini dijitalleştiren akıllı bir operasyon asistanıdır. Google Gemini 2.5 Flash'ın analiz yeteneklerini kullanarak; anlık hava durumu, restoran kapasitesi, dış riskler (etkinlik iptalleri vb.) ve dolaptaki stok durumunu saniyeler içinde sentezler. Şeflere sadece veri sunmakla kalmaz; net bir "Beklenen Müşteri" tahmini, madde madde iş emirleri ve artan malzemeler için "Sıfır Atık" (Zero-Waste) tarifleri üreterek israfı daha oluşmadan önler.
 
 ## 📺 Canlı Demo
-* **Yayın Linki:** https://[proje-adin].vercel.app
-* **Demo Video:** https://loom.com/share/[video-id]
+* **Yayın Linki:** https://resto-gen-2x1b07lur-zehra-aksoys-projects.vercel.app/
+* **Demo Video:** https://www.loom.com/share/6220500a62434d1d8ce1f288f9add1fb
 
 ## 🛠️ Kullanılan Teknolojiler
 * **Frontend:** Next.js 14 (App Router), TypeScript, Tailwind CSS
