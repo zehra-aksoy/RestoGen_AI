@@ -1,5 +1,5 @@
-#💡 Proje Fikri: RestoGen AI
-##1. Problem Tanımı
+💡 Proje Fikri: RestoGen AI
+1. Problem Tanımı
 Dünyada üretilen gıdaların yaklaşık üçte biri israf edilirken, bu durum hem geri dönülemez çevresel felaketlere hem de devasa ekonomik kayıplara yol açmaktadır. Özellikle profesyonel mutfaklar (restoranlar ve toplu yemekhaneler), bu israfın en yoğun yaşandığı ve kontrol edilmesinin en zor olduğu alanların başında gelmektedir.
 
 Temel Sorunlar:
