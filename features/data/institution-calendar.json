@@ -1,0 +1,22 @@
+{
+  "timezone": "Europe/Istanbul",
+  "periods": [
+    {
+      "id": "exam-week-march",
+      "label": "Sınav haftası (örnek)",
+      "start": "2025-03-10",
+      "end": "2025-03-14",
+      "prepMultiplier": 0.85,
+      "note": "Öğrenci/ personel yoğunluğu düşük olabilir; porsiyonları hafifçe azaltın."
+    }
+  ],
+  "specialDays": [
+    {
+      "date": "2025-04-23",
+      "label": "Ulusal Egemenlik ve Çocuk Bayramı",
+      "prepMultiplier": 1.15,
+      "note": "Özel menü veya yoğunluk için +hazırlık öngörün."
+    }
+  ],
+  "closedDays": []
+}
