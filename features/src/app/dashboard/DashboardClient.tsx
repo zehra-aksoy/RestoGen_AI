@@ -1,0 +1,416 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { buildPrepAdvice } from "@/lib/prep-advice";
+import {
+  fetchWeatherClient,
+  geocodeCityToCoords,
+  weatherCodeLabel,
+  type WeatherSummary,
+} from "@/lib/openmeteo";
+import {
+  WASTE_TARGET_PERCENT,
+  loadWasteSnapshot,
+} from "@/lib/metrics";
+import {
+  loadRestogenSettings,
+  type RestogenSettings,
+} from "@/lib/restogen-settings";
+import { SectionCard, UiStates } from "@/components/UiStates";
+import { LoadingScreen } from "@/components/LoadingScreen";
+import { OrderChecklist } from "@/components/OrderChecklist";
+
+const DEFAULT_LAT = 41.0082;
+const DEFAULT_LON = 28.9784;
+
+export function DashboardClient() {
+  const router = useRouter()
+  const [settings, setSettings] = useState<RestogenSettings | null>(null)
+  const [settingsLoading, setSettingsLoading] = useState(true)
+
+  const [weather, setWeather] = useState<WeatherSummary | null>(null);
+  const [wErr, setWErr] = useState<string | null>(null);
+  const [wLoading, setWLoading] = useState(true);
+  const [risk, setRisk] = useState(45);
+  const [expectedCustomers, setExpectedCustomers] = useState<number | "">("");
+  const [plateWastePercent, setPlateWastePercent] = useState<number | "">("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisSummary, setAnalysisSummary] = useState("");
+  const [donotOrderList, setDonotOrderList] = useState<string[]>([]);
+  
+  const [chefEmail, setChefEmail] = useState<string>("");
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [tempEmail, setTempEmail] = useState("");
+  
+  type HistoryItem = { date: string; riskScore: number; summary: string };
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("restogen_analysis_history");
+    if (saved) {
+      try {
+        setHistory(JSON.parse(saved));
+      } catch (e) {
+        console.error("Geçmiş okuma hatası", e);
+      }
+    }
+    const savedEmail = localStorage.getItem("restogen_chef_email");
+    if (savedEmail) {
+      setChefEmail(savedEmail);
+    }
+  }, []);
+
+  const analyzeWithGemini = async () => {
+    if (!settings) return;
+
+    if (!chefEmail || chefEmail.trim() === "") {
+      alert("Lütfen bildirimler için önce ayarlar (çark ikonu) kısmından mail adresinizi girin.");
+      return;
+    }
+
+    setIsAnalyzing(true);
+    try {
+      const res = await fetch("/api/gemini/dashboard-analysis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          settings,
+          expectedCustomers,
+          plateWastePercent,
+          weather,
+          history,
+          chefEmail,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "API hatası");
+      
+      setRisk(data.riskScore);
+      setAnalysisSummary(data.analysisSummary);
+      setDonotOrderList(data.donotOrderList);
+
+      const newHistoryItem = {
+        date: new Date().toLocaleDateString("tr-TR"),
+        riskScore: data.riskScore,
+        summary: data.analysisSummary,
+      };
+      const updatedHistory = [...history, newHistoryItem].slice(-5);
+      setHistory(updatedHistory);
+      localStorage.setItem("restogen_analysis_history", JSON.stringify(updatedHistory));
+      
+    } catch (e: unknown) {
+      console.error(e);
+      alert("Analiz sırasında bir hata oluştu: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  useEffect(() => {
+    const snap = loadWasteSnapshot();
+    if (snap) {
+      setRisk(snap.riskScore);
+    }
+  }, []);
+
+  useEffect(() => {
+    const s = loadRestogenSettings()
+    if (!s) {
+      router.replace("/")
+      return
+    }
+    setSettings(s)
+    setSettingsLoading(false)
+  }, [router])
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (settingsLoading) return;
+
+      setWLoading(true);
+      setWErr(null);
+      const applyCoords = async (lat: number, lon: number) => {
+        try {
+          const w = await fetchWeatherClient(lat, lon);
+          if (!cancelled) setWeather(w);
+        } catch (e) {
+          if (!cancelled)
+            setWErr(e instanceof Error ? e.message : "Hava verisi alınamadı.");
+        } finally {
+          if (!cancelled) setWLoading(false);
+        }
+      };
+
+      const getFallbackCoords = async () => {
+        if (settings?.city) {
+          const coords = await geocodeCityToCoords(settings.city).catch(
+            () => null,
+          );
+          if (coords) return coords
+        }
+        return { latitude: DEFAULT_LAT, longitude: DEFAULT_LON }
+      };
+
+      if (typeof navigator !== "undefined" && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            void applyCoords(pos.coords.latitude, pos.coords.longitude);
+          },
+          () => {
+            void (async () => {
+              const coords = await getFallbackCoords();
+              await applyCoords(coords.latitude, coords.longitude);
+            })();
+          },
+          { timeout: 8000, maximumAge: 600_000 },
+        );
+      } else {
+        const coords = await getFallbackCoords();
+        await applyCoords(coords.latitude, coords.longitude);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsLoading, settings]);
+
+  const advice = useMemo(
+    () => buildPrepAdvice(weather, new Date()),
+    [weather],
+  );
+
+  return (
+    <>
+      <LoadingScreen isLoading={settingsLoading || wLoading || isAnalyzing} />
+      <div className="space-y-8">
+        {/* Full Width Hero Card */}
+        <div 
+          className="relative overflow-hidden rounded-2xl shadow-lg min-h-[260px] lg:min-h-[300px] flex items-center justify-center p-8 bg-sidebar"
+        >
+          {/* Settings Gear Icon */}
+          <button 
+            onClick={() => {
+              setTempEmail(chefEmail);
+              setShowEmailModal(true);
+            }}
+            className="absolute top-4 right-5 z-20 p-2 text-cream/70 hover:text-white hover:bg-white/10 rounded-full transition-all"
+            title="E-posta Ayarları"
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
+
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=2070&auto=format&fit=crop"
+            alt="Professional healthy kitchen"
+            className="absolute inset-0 h-full w-full object-cover opacity-40 mix-blend-luminosity"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-sidebar/90 via-sidebar/40 to-transparent" />
+          
+          <div className="relative z-10 text-center flex flex-col items-center max-w-2xl">
+            <h1 className="text-3xl font-serif font-bold text-cream sm:text-5xl leading-tight drop-shadow-md">
+              İyi Geceler, {settings?.name ? settings.name.split(" ")[0] : "Şef"}
+            </h1>
+            <p className="mt-4 text-sm sm:text-base text-cream/90 font-medium tracking-wide">
+              {settings
+                ? `${settings.businessName} için bugünkü analizim hazır!`
+                : "Günlük israf riski ve hazırlık özeti."}
+            </p>
+            {settingsLoading ? null : settings ? (
+              <p className="mt-2 text-xs sm:text-sm text-cream/70 backdrop-blur-sm bg-black/20 px-4 py-1.5 rounded-full inline-block">
+                Aşağıdaki özet, hava durumu ve kurum takvimine göre hazırlanır.
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+      <div className="grid gap-6 lg:grid-cols-2 items-start">
+        {/* Sol Kolon: Günlük İsraf Riski */}
+        <SectionCard
+          title="Günlük israf riski (özet)"
+          subtitle={`Hedef: aşırı hazırlık israfını ~%${WASTE_TARGET_PERCENT} azaltma.`}
+        >
+          <div className="flex flex-col gap-4 py-2">
+            <div className="flex flex-col sm:flex-row gap-4 mb-2">
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-ink-muted uppercase tracking-wider mb-2">
+                  Beklenen Müşteri
+                </label>
+                <input
+                  type="number"
+                  value={expectedCustomers === "" ? "" : expectedCustomers}
+                  onChange={(e) => setExpectedCustomers(e.target.value === "" ? "" : Number(e.target.value))}
+                  placeholder="Örn. 120"
+                  className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-ink focus:border-sage focus:outline-none focus:ring-1 focus:ring-sage"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-ink-muted uppercase tracking-wider mb-2">
+                  Dönen Tabak Atığı (%)
+                </label>
+                <input
+                  type="number"
+                  value={plateWastePercent === "" ? "" : plateWastePercent}
+                  onChange={(e) => setPlateWastePercent(e.target.value === "" ? "" : Number(e.target.value))}
+                  placeholder="Örn. 15"
+                  className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-ink focus:border-sage focus:outline-none focus:ring-1 focus:ring-sage"
+                />
+              </div>
+            </div>
+            <button
+              onClick={analyzeWithGemini}
+              disabled={isAnalyzing || expectedCustomers === "" || plateWastePercent === ""}
+              className="w-full rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 py-3 text-sm font-semibold text-white shadow-md transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed mb-2 flex items-center justify-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Yapay Zeka ile Analizi Başlat
+            </button>
+          </div>
+
+          <div className="flex flex-col items-center justify-center py-6 border-t border-black/5 mt-4">
+          <div className="relative w-full max-w-[280px]">
+            <svg viewBox="0 0 200 120" className="w-full h-auto overflow-visible drop-shadow-sm">
+              <defs>
+                <linearGradient id="gaugeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#10b981" />
+                  <stop offset="50%" stopColor="#f97316" />
+                  <stop offset="100%" stopColor="#ef4444" />
+                </linearGradient>
+                <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="4" result="blur" />
+                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
+              </defs>
+              {/* Background Arc */}
+              <path
+                d="M 20 100 A 80 80 0 0 1 180 100"
+                fill="none"
+                stroke="currentColor"
+                className="text-black/5"
+                strokeWidth="4"
+                strokeLinecap="round"
+              />
+              {/* Filled Arc */}
+              <path
+                d="M 20 100 A 80 80 0 0 1 180 100"
+                fill="none"
+                stroke="url(#gaugeGradient)"
+                strokeWidth="6"
+                strokeLinecap="round"
+                strokeDasharray={251.3}
+                strokeDashoffset={251.3 * (1 - risk / 100)}
+                className="transition-all duration-1000 ease-out"
+                filter="url(#glow)"
+              />
+            </svg>
+            <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center justify-end text-center pb-2">
+              <span className="text-5xl font-bold tracking-tight text-ink">
+                %{risk}
+              </span>
+              <span className={`text-sm font-semibold tracking-wide uppercase mt-1 ${
+                risk < 40 ? "text-emerald-500" : risk < 70 ? "text-orange-500" : "text-red-500"
+              }`}>
+                {risk < 40 ? "Düşük" : risk < 70 ? "Orta" : "Kritik"}
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-8 rounded-xl bg-gradient-to-br from-sage/10 to-transparent p-5 text-left border border-sage/20 w-full relative">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="flex h-6 w-6 items-center justify-center rounded-full bg-sage/20 text-sage text-xs">
+                ✨
+              </div>
+              <h4 className="text-sm font-semibold text-ink">Gemini Analiz Özeti</h4>
+            </div>
+            <p className="text-sm text-ink-muted leading-relaxed">
+              {analysisSummary ? analysisSummary : "Hâlâ analiz bekleniyor... Lütfen üstteki bilgileri doldurup yapay zeka analizini başlatın."}
+            </p>
+          </div>
+        </div>
+        </SectionCard>
+
+        {/* Sağ Kolon: Sipariş Kontrol Paneli */}
+        <SectionCard title="Sipariş Kontrol Paneli" subtitle="Yapay zeka analizleri ve güncel stok durumu.">
+          <OrderChecklist aiWarnings={donotOrderList} />
+        </SectionCard>
+
+        {/* Alt Satır: Hava Durumu vs. */}
+
+        <SectionCard
+          title="Hava durumu"
+          subtitle="Open-Meteo (anahtarsız). Konum izni yoksa İstanbul varsayılır."
+        >
+          <UiStates loading={wLoading} error={wErr}>
+            {weather ? (
+              <div className="text-sm">
+                <p className="font-medium text-ink">
+                  {weather.temperatureC.toFixed(0)}°C ·{" "}
+                  {weatherCodeLabel(weather.code)}
+                </p>
+                <p className="mt-1 text-ink-muted">
+                  Yağış: {weather.precipitationMm.toFixed(1)} mm · Güncelleme:{" "}
+                  {weather.fetchedAt}
+                </p>
+              </div>
+            ) : null}
+          </UiStates>
+        </SectionCard>
+      </div>
+
+      <SectionCard title={advice.headline} subtitle="Kural tabanlı + hava/takvim">
+        <ul className="list-inside list-disc space-y-2 text-sm text-ink">
+          {advice.lines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      </SectionCard>
+    </div>
+
+    {/* Email Settings Modal */}
+    {showEmailModal && (
+      <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+        <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4 animate-in zoom-in-95">
+          <h3 className="text-lg font-bold text-ink mb-1">E-posta Ayarları</h3>
+          <p className="text-sm text-ink-muted mb-4">
+            n8n otomasyonu ve bildirimler için kullanılacak şef e-posta adresiniz.
+          </p>
+          <input
+            type="email"
+            placeholder="isim@restoran.com"
+            value={tempEmail}
+            onChange={(e) => setTempEmail(e.target.value)}
+            className="w-full rounded-lg border border-black/10 px-4 py-2 text-sm text-ink focus:border-sage focus:outline-none focus:ring-1 focus:ring-sage mb-6"
+          />
+          <div className="flex justify-end gap-3">
+            <button 
+              onClick={() => setShowEmailModal(false)}
+              className="px-4 py-2 text-sm font-medium text-ink-muted hover:text-ink transition-colors"
+            >
+              İptal
+            </button>
+            <button 
+              onClick={() => {
+                const updated = tempEmail.trim();
+                setChefEmail(updated);
+                localStorage.setItem("restogen_chef_email", updated);
+                setShowEmailModal(false);
+              }}
+              className="px-4 py-2 rounded-lg bg-sage hover:bg-[#204E41] text-white text-sm font-medium transition-colors shadow-sm"
+            >
+              Kaydet
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
+  );
+}
